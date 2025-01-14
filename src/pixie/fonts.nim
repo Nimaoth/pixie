@@ -253,7 +253,8 @@ proc typeset*(
   bounds = vec2(0, 0),
   hAlign = LeftAlign,
   vAlign = TopAlign,
-  wrap = true
+  wrap = true,
+  snapToPixel = true,
 ): Arrangement {.raises: [].} =
   ## Lays out the character glyphs and returns the arrangement.
   ## Optional parameters:
@@ -450,11 +451,16 @@ proc typeset*(
 
   block: # Nudge selection rects to pixel grid
     for rect in result.selectionRects.mitems:
-      let
-        minX = round(rect.x)
-        maxX = round(rect.x + rect.w)
-        minY = round(rect.y)
-        maxY = round(rect.y + rect.h)
+      var
+        minX = rect.x
+        maxX = rect.x + rect.w
+        minY = rect.y
+        maxY = rect.y + rect.h
+      if snapToPixel:
+        minX = round(minX)
+        maxX = round(maxX)
+        minY = round(minY)
+        maxY = round(maxY)
       rect.x = minX
       rect.w = maxX - minX
       rect.y = minY
@@ -466,7 +472,8 @@ proc typeset*(
   bounds = vec2(0, 0),
   hAlign = LeftAlign,
   vAlign = TopAlign,
-  wrap = true
+  wrap = true,
+  snapToPixel = true,
 ): Arrangement {.inline, raises: [].} =
   ## Lays out the character glyphs and returns the arrangement.
   ## Optional parameters:
@@ -474,7 +481,7 @@ proc typeset*(
   ## hAlign: horizontal alignment of the text
   ## vAlign: vertical alignment of the text
   ## wrap: enable/disable text wrapping
-  typeset([newSpan(text, font)], bounds, hAlign, vAlign, wrap)
+  typeset([newSpan(text, font)], bounds, hAlign, vAlign, wrap, snapToPixel)
 
 proc layoutBounds*(arrangement: Arrangement): Vec2 {.raises: [].} =
   ## Computes the width and height of the arrangement in pixels.
