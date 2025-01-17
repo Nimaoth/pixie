@@ -1,4 +1,4 @@
-version     = "5.0.8"
+version     = "5.0.9"
 author      = "Andre von Houck and Ryan Oldenburg"
 description = "Full-featured 2d graphics library for Nim."
 license     = "MIT"

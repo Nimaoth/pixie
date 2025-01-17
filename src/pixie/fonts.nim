@@ -249,13 +249,14 @@ proc canWrap(rune: Rune): bool {.inline.} =
   rune == Rune(32) or rune.isWhiteSpace()
 
 proc typeset*(
+  arrangement: Arrangement,
   spans: openarray[Span],
   bounds = vec2(0, 0),
   hAlign = LeftAlign,
   vAlign = TopAlign,
   wrap = true,
   snapToPixel = true,
-): Arrangement {.raises: [].} =
+) {.raises: [].} =
   ## Lays out the character glyphs and returns the arrangement.
   ## Optional parameters:
   ## bounds: width determines wrapping and hAlign, height for vAlign
@@ -263,10 +264,15 @@ proc typeset*(
   ## vAlign: vertical alignment of the text
   ## wrap: enable/disable text wrapping
 
-  result = Arrangement()
+  let linesStart = arrangement.lines.len
+  let spansStart = arrangement.spans.len
+  let fontsStart = arrangement.fonts.len
+  let runesStart = arrangement.runes.len
+  let positionsStart = arrangement.positions.len
+  let selectionRectsStart = arrangement.selectionRects.len
 
   block: # Walk and filter the spans
-    var start: int
+    var start: int = runesStart
     for span in spans:
       var
         i = 0
@@ -280,21 +286,21 @@ proc typeset*(
 
       if runes.len > 0:
         runes.convertTextCase(span.font.textCase)
-        result.runes.add(runes)
-        result.spans.add((start, start + runes.len - 1))
-        result.fonts.add(span.font)
+        arrangement.runes.add(runes)
+        arrangement.spans.add((start, start + runes.len - 1))
+        arrangement.fonts.add(span.font)
         start += runes.len
 
-  if result.runes.len == 0:
+  if arrangement.runes.len == runesStart:
     return
 
-  result.positions.setLen(result.runes.len)
-  result.selectionRects.setLen(result.runes.len)
+  arrangement.positions.setLen(arrangement.runes.len)
+  arrangement.selectionRects.setLen(arrangement.runes.len)
 
-  result.lines = @[(0, 0)] # (start, stop)
+  arrangement.lines.add (runesStart, runesStart) # (start, stop)
 
   block: # Arrange the glyphs horizontally first (handling line breaks)
-    proc advance(font: Font, runes: seq[Rune], i: int): float32 {.inline.} =
+    proc advance(font: Font, runes: openArray[Rune], i: int): float32 {.inline.} =
       if not font.noKerningAdjustments and i + 1 < runes.len:
         result += font.typeface.getKerningAdjustment(runes[i], runes[i + 1])
       result += font.typeface.getAdvance(runes[i])
@@ -302,24 +308,25 @@ proc typeset*(
 
     var
       at: Vec2
-      prevCanWrap: int
-    for spanIndex, (start, stop) in result.spans:
-      let font = result.fonts[spanIndex]
+      prevCanWrap: int = runesStart
+    for spanIndex in spansStart..arrangement.spans.high:
+      let (start, stop) = arrangement.spans[spanIndex]
+      let font = arrangement.fonts[spanIndex]
       for runeIndex in start .. stop:
-        let rune = result.runes[runeIndex]
+        let rune = arrangement.runes[runeIndex]
         if rune == LF:
           let advance = font.typeface.getAdvance(SP) * font.scale
-          result.positions[runeIndex] = at
-          result.selectionRects[runeIndex] = rect(at.x, at.y, advance, 0)
+          arrangement.positions[runeIndex] = at
+          arrangement.selectionRects[runeIndex] = rect(at.x, at.y, advance, 0)
           at.x = 0
           at.y += 1
-          prevCanWrap = 0
-          result.lines[^1][1] = runeIndex
+          prevCanWrap = runesStart
+          arrangement.lines[^1][1] = runeIndex
           # Start a new line if we are not at the end
-          if runeIndex + 1 < result.runes.len:
-            result.lines.add((runeIndex + 1, 0))
+          if runeIndex + 1 < arrangement.runes.len:
+            arrangement.lines.add((runeIndex + 1, 0))
         else:
-          let advance = advance(font, result.runes, runeIndex)
+          let advance = advance(font, arrangement.runes, runeIndex)
           if wrap and rune != SP and bounds.x > 0 and at.x + advance > bounds.x:
             # Wrap to new line
             at.x = 0
@@ -328,34 +335,35 @@ proc typeset*(
             var lineStart = runeIndex
 
             # Go back and wrap glyphs after the wrap index down to the next line
-            if prevCanWrap > 0 and prevCanWrap != runeIndex:
-              for i in prevCanWrap + 1 ..< runeIndex:
-                result.positions[i] = at
-                result.selectionRects[i].xy = vec2(at.x, at.y)
-                at.x += advance(font, result.runes, i)
+            if prevCanWrap > runesStart and prevCanWrap != runeIndex:
+              for i in prevCanWrap + 1 ..< runeIndex: # todo: i
+                arrangement.positions[i] = at
+                arrangement.selectionRects[i].xy = vec2(at.x, at.y)
+                at.x += advance(font, arrangement.runes, i)
                 dec lineStart
-              prevCanWrap = 0
+              prevCanWrap = runesStart
 
-            result.lines[^1][1] = lineStart - 1
-            result.lines.add((lineStart, 0))
+            arrangement.lines[^1][1] = lineStart - 1
+            arrangement.lines.add((lineStart, 0))
 
           if rune.canWrap():
             prevCanWrap = runeIndex
 
-          result.positions[runeIndex] = at
-          result.selectionRects[runeIndex] = rect(at.x, at.y, advance, 0)
+          arrangement.positions[runeIndex] = at
+          arrangement.selectionRects[runeIndex] = rect(at.x, at.y, advance, 0)
           at.x += advance
 
-    result.lines[^1][1] = result.runes.len - 1
+    arrangement.lines[^1][1] = arrangement.runes.len - 1
 
     if hAlign != LeftAlign:
       # Since horizontal alignment adjustments are different for each line,
       # find the start and stop of each line of text.
-      for (start, stop) in result.lines:
+      for lineIndex in linesStart..arrangement.lines.high:
+        let (start, stop) = arrangement.lines[lineIndex]
         var furthestX: float32
         for i in countdown(stop, start):
-          if result.runes[i] != SP and result.runes[i] != LF:
-            furthestX = result.selectionRects[i].x + result.selectionRects[i].w
+          if arrangement.runes[i] != SP and arrangement.runes[i] != LF:
+            furthestX = arrangement.selectionRects[i].x + arrangement.selectionRects[i].w
             break
 
         var xAdjustment: float32
@@ -369,28 +377,30 @@ proc typeset*(
 
         if xAdjustment != 0:
           for i in start .. stop:
-            result.positions[i].x += xAdjustment
-            result.selectionRects[i].x += xAdjustment
+            arrangement.positions[i].x += xAdjustment
+            arrangement.selectionRects[i].x += xAdjustment
 
   block: # Arrange the lines vertically
     let initialY = block:
       var maxInitialY: float32
       block outer:
-        for spanIndex, (start, stop) in result.spans:
+        for spanIndex in spansStart..arrangement.spans.high:
+          let (start, stop) = arrangement.spans[spanIndex]
           let
-            font = result.fonts[spanIndex]
+            font = arrangement.fonts[spanIndex]
             fontUnitInitialY = font.typeface.ascent + font.lineGap / 2
           maxInitialY = max(maxInitialY, round(fontUnitInitialY * font.scale))
-          if stop >= result.lines[0][1]:
+          if stop >= arrangement.lines[linesStart][1]:
             break outer
       maxInitialY
 
-    var lineHeights = newSeq[float32](result.lines.len)
+    var lineHeights = newSeq[float32](arrangement.lines.len - linesStart)
     block: # Compute each line's line height
       var line: int
-      for spanIndex, (start, stop) in result.spans:
+      for spanIndex in spansStart..arrangement.spans.high:
+        let (start, stop) = arrangement.spans[spanIndex]
         let
-          font = result.fonts[spanIndex]
+          font = arrangement.fonts[spanIndex]
           fontLineHeight =
             if font.lineHeight >= 0:
               font.lineHeight
@@ -400,39 +410,40 @@ proc typeset*(
         for runeIndex in start .. stop:
           # This span could be many lines. This check can be made faster by
           # hopping based on line endings instead of checking each index.
-          if line + 1 < result.lines.len and
-            runeIndex == result.lines[line + 1][0]:
+          if line + 1 < arrangement.lines.len - linesStart and
+            runeIndex == arrangement.lines[line + 1 + linesStart][0]:
             inc line
             lineHeights[line] = max(lineHeights[line], fontLineHeight)
         # Handle when span and line endings coincide
-        if line + 1 < result.lines.len and stop == result.lines[line][1]:
+        if line + 1 < arrangement.lines.len - linesStart and stop == arrangement.lines[line + linesStart][1]:
           inc line
 
     block: # Vertically position the glyphs
       var
         line: int
         baseline = initialY
-      for spanIndex, (start, stop) in result.spans:
+      for spanIndex in spansStart..arrangement.spans.high:
+        let (start, stop) = arrangement.spans[spanIndex]
         let
-          font = result.fonts[spanIndex]
+          font = arrangement.fonts[spanIndex]
           lineHeight =
             if font.lineHeight >= 0:
               font.lineHeight
             else:
               font.defaultLineHeight
         for runeIndex in start .. stop:
-          if line + 1 < result.lines.len and
-            runeIndex == result.lines[line + 1][0]:
+          if line + 1 < arrangement.lines.len - linesStart and
+            runeIndex == arrangement.lines[line + 1 + linesStart][0]:
             inc line
             baseline += lineHeights[line]
-          result.positions[runeIndex].y = baseline
-          result.selectionRects[runeIndex].y = baseline -
+          arrangement.positions[runeIndex].y = baseline
+          arrangement.selectionRects[runeIndex].y = baseline -
             round((font.typeface.ascent + font.lineGap / 2) * font.scale)
-          result.selectionRects[runeIndex].h = lineHeight
+          arrangement.selectionRects[runeIndex].h = lineHeight
 
     if vAlign != TopAlign:
       let
-        finalSelectionRect = result.selectionRects[^1]
+        finalSelectionRect = arrangement.selectionRects[^1]
         furthestY = finalSelectionRect.y + finalSelectionRect.h
 
       var yAdjustment: float32
@@ -445,12 +456,13 @@ proc typeset*(
           yAdjustment = bounds.y - furthestY
 
       if yAdjustment != 0:
-        for i in 0 ..< result.positions.len:
-          result.positions[i].y += yAdjustment
-          result.selectionRects[i].y += yAdjustment
+        for i in positionsStart ..< arrangement.positions.len:
+          arrangement.positions[i].y += yAdjustment
+          arrangement.selectionRects[i].y += yAdjustment
 
   block: # Nudge selection rects to pixel grid
-    for rect in result.selectionRects.mitems:
+    for i in selectionRectsStart..arrangement.selectionRects.high:
+      let rect = arrangement.selectionRects[i].addr
       var
         minX = rect.x
         maxX = rect.x + rect.w
@@ -465,6 +477,23 @@ proc typeset*(
       rect.w = maxX - minX
       rect.y = minY
       rect.h = maxY - minY
+
+proc typeset*(
+  spans: openarray[Span],
+  bounds = vec2(0, 0),
+  hAlign = LeftAlign,
+  vAlign = TopAlign,
+  wrap = true,
+  snapToPixel = true,
+): Arrangement {.raises: [].} =
+  ## Lays out the character glyphs and returns the arrangement.
+  ## Optional parameters:
+  ## bounds: width determines wrapping and hAlign, height for vAlign
+  ## hAlign: horizontal alignment of the text
+  ## vAlign: vertical alignment of the text
+  ## wrap: enable/disable text wrapping
+  result = Arrangement()
+  result.typeset(spans, bounds, hAlign, vAlign, wrap, snapToPixel)
 
 proc typeset*(
   font: Font,
